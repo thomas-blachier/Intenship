@@ -1,0 +1,1104 @@
+
+
+---
+title: "Delimitation of Nodal Regions Based on Transport Flows"
+author: "[Thomas Blachier](https://github.com/thomas-blachier)"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+github: "thomas-blachier"
+
+
+logo: 
+output: 
+  epuRate::epurate:
+    toc: TRUE
+    number_sections: FALSE
+    code_folding: "hide"
+---
+
+
+<br><br>
+
+
+# Modelization and data
+
+***
+## Modelization
+
+  In this paper, we are studying the possibilities of creating new administrative regions that are more suited for an optimum public service in Czech republic. To do that we considered a simplified model, the following : Each region has a service center and several cities. And Czech republic has several regions.
+
+![Administrative regions of Czech republic](http://www.risy.cz/Files/Images/mapy/dokumenty_reg_rozvoj/M_SRCR_01.jpg)
+
+The interest of our study resides in the fact that we consider the population of the cities and the flow of population between them to make much more accurates administrative regions. Moreover, we will consider the following : coordinates of the cities, population of cities, flows of population between cities.We make the hypothesis that the service centres are open during the day and that a part of the population of a city moved in other cities ,hence the flow of population.
+The most relevant and practical modelization we can infer here is a centroid modelization with weights equal to the population of the master city and flow of popualtion for the other cities linked. It gives us corrected coordinates of cities taking flows of population and population itself into account.
+
+* Let:
+    + $ai$  representing the coordinates of the cities .
+    + $F_{ij}$  representing the population flow during a day from the city $i$ to the city $j$. It could be null.
+    + $P_i$ is the population of the city of coordinate $ai$.
+    + $\omega_i$ are the new coordinates of the cities .
+    
+We prove that $\omega_i$ is written as the following :
+
+$$\omega_i = a_i+\sum_{i \neq j}(F_{ij}/{P_i})(a_j-a_i)~~~~~~(1)$$
+
+
+
+
+
+Note that the formula has the good dimension (distance).
+
+
+
+
+## Call of libraries
+
+```{r, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(ggvoronoi)
+library(tripack)
+library(readr)
+library(deldir)
+library(SDMTools)
+library(readr)
+library(arsenal)
+library(ggforce)
+library(tidyverse)
+library(mclust)
+library(plotly)
+library(rlist)
+library(png)
+library(jpeg)
+```
+
+
+
+## Import of data from the datastore
+
+
+* We import the following dataframes : 
+    + reg (id of cities, name of municipalities, name of regions,coordinates of cities)
+    + odm (flow of populations between cities)
+    + pop (population of cities)
+    + cisreg_l2g (Id of cities , name of cities, centroids of cities)
+    + cisreg_cz0 (centroid of czech republic)
+    + cisreg_la2 (Id of regions , name of regions, centroids of regions)
+    + attrasreg_1561366112096 (Id of cities, name of municipalities,population of cities, area of municipalities)
+    + intpol_pro_s3e_vsb_sacz0_com_geomapfor_l2g_cen (Centroids of regions )
+    + intpol_pro_s3e_vsb_sacz0_com_geomapfor_l2g_pol (Polygons of regions ).
+
+
+
+```{r, message=FALSE, warning=FALSE}
+df.path="~/datastore/AlfaDWbh6/ext-clu/dat"
+df.files = list.files(df.path, recursive = T, full.names = T)
+odm <- read_csv(df.files [grepl ("odm", df.files)])
+pop <- read_csv(df.files [grepl ("pop", df.files)])
+reg <- read_csv(df.files [grepl ("reg", df.files)])
+df.path2 = "~/datastore/AlfaDWbh6/ext-clu/dat2"
+df.files2 = list.files(df.path2, recursive = T, full.names = T)
+cisreg_l2g <- read_csv(df.files2 [grepl ("cisreg_l2g", df.files2)])
+cisreg_cz0 <- read_csv(df.files2 [grepl ("cisreg_cz0", df.files2)])
+attrasreg_1561366112096 <- read_csv(df.files2 [grepl ("attrasreg_1561366112096", df.files2)])
+cisreg_la2 <- read_csv(df.files2 [grepl ("cisreg_la2", df.files2)])
+intpol_pro_s3e_vsb_sacz0_com_geomapfor_l2g_cen<- read_csv(df.files2 [grepl ("intpol_pro_s3e_vsb_sacz0_com_geomapfor_l2g_cen", df.files2)])
+intpol_pro_s3e_vsb_sacz0_com_geomapfor_l2g_pol<- read_csv(df.files2 [grepl ("intpol_pro_s3e_vsb_sacz0_com_geomapfor_l2g_pol", df.files2)])
+# Creation of set by joining odm (flow between cities) and pop (population of the cities) .
+```
+
+
+
+
+# First case : The number of regions is the same as the current one
+
+***
+
+
+## Creation of a dataset of city coordinates corrected by taking population and flows of population into account
+
+We create dataset called "omega" wich is basically the set of points for the data set "reg" but corrected by taking population and flows of population into account.We simply apply the formula $(1)$ seen above.
+
+```{r, message=FALSE, warning=FALSE}
+set = inner_join(odm,rename(pop,"reg" = "cisdan"),by="reg")
+p = reg
+p$ZobZkr = NULL
+p$GraOrp = NULL
+p$pix = NULL
+p$lon = NULL
+p$lat = NULL
+# We take only the coordinates of the cities and we create an alias.
+set = inner_join(set,rename(p,"reg" = "cisdan"),by = "reg")
+set = rename(set,"xa"="x")
+set = rename(set,"ya"="y")
+set = inner_join(set,rename(p,"re2" = "cisdan"),by = "re2")
+set = rename(set,"xb"="x")
+set = rename(set,"yb"="y")
+# we join set with the coordinates of the starting city and the ending city for each flow.
+set$xab = set$xb - set$xa
+set$yab = set$yb - set$ya
+# Creation of the vectors start to end for each flow 
+set = filter(set,set$d01 > 0)
+set = filter(set,set$popupd_d01 > 0)
+# Elimination of the null values of populations and flows .   
+set$x_vector_flow = (set$xab * set$d01)/set$popupd_d01
+set$y_vector_flow = (set$yab * set$d01)/set$popupd_d01
+# Application of the formula according to the following  model (https://docs.google.com/document/d/1uwNQuylkccQlkgxTCjGKvB_X2BLYoQue8DZN8sRO00U/edit)
+q1 = set%>%
+  group_by(reg)%>%  
+  summarize(new_vectors_x = sum(x_vector_flow,na.rm= TRUE))
+q2 = set%>%
+  group_by(reg)%>%  
+  summarize(new_vectors_y = sum(y_vector_flow,na.rm= TRUE))
+# Sum of the flows when they have the same starting city
+q = inner_join(q1,q2,by = "reg")
+q = inner_join(q,rename(p,"reg"="cisdan") ,by="reg")
+q$x_final = q$new_vectors_x + q$x
+q$y_final = q$new_vectors_y + q$y
+# Still application of the formula
+omega = q
+omega$new_vectors_x = NULL
+omega$new_vectors_y = NULL
+omega$x = NULL
+omega$y = NULL
+omega$reg = NULL
+omega = rename(omega,"x" = "x_final")
+omega = rename(omega,"y" = "y_final")
+omega = na.omit(omega)
+```
+
+Here is a dynamic plot with old coordinates and corrected coordinates
+
+```{r, message=FALSE, warning=FALSE}
+U = ggplot() +geom_point(data=reg ,aes(x = reg$x, y = reg$y, color="red"),size=0.5)+theme(legend.position = "none")+geom_point(data=omega ,aes(x = omega$x, y = omega$y, color="green"),size=0.5)+xlab("x")+ylab("y")
+u=ggplotly(U)
+u
+```
+
+As we can see, the more populous the city is the less the coordinate is likely to change. Cities around Prague have less population and they face big flows of population, their coordinates are very different.
+
+```{r, message=FALSE, warning=FALSE}
+U+ coord_fixed(xlim = c(-8e+5,-7e+5), ylim = c(-11e+5,-10e+5))+geom_circle(aes(x0 = -7.4e+5, y0 = -10.45e+5, r = 22000),col="black")
+```
+
+Near the border, cities have very few population, their coordinates have shifted too.
+
+```{r, message=FALSE, warning=FALSE}
+U+coord_fixed(xlim = c(-7.5e+5,-6.5e+5), ylim = c(-10e+5,-9.0e+5))+geom_circle(aes(x0 = -6.875e+5, y0 = -9.5e+5, r = 22000),col="black")
+
+```
+
+## Test of different package to plot Voronoi maps
+
+To plot Voronoi maps we tried different packages, and we eventually chose the package "deldir".
+
+### ggvoronoi
+
+
+```{r, message=FALSE, warning=FALSE}
+print(paste0("numbers of regions :",length(unique(reg$GraOrp))))#206 regions here
+
+omega_cluster = kmeans(omega,length(unique(reg$GraOrp)))
+
+omega_plot = ggplot(as.data.frame(omega_cluster$centers),aes(x,y))+
+  stat_voronoi(geom = "path")+
+  geom_point()
+omega_plot
+
+```
+
+
+###Tripack
+
+
+```{r, message=FALSE, warning=FALSE}
+omega_cluster = kmeans(omega,length(unique(reg$GraOrp)))
+voronoiTripack = voronoi.mosaic(omega_cluster$centers[,1],omega_cluster$centers[,2],duplicate="error")
+
+plot(voronoiTripack)
+```
+
+###deldir
+
+
+```{r, message=FALSE, warning=FALSE}
+omega_cluster = kmeans(omega,length(unique(reg$GraOrp)))
+x = omega_cluster$centers[,1]
+y = omega_cluster$centers[,2]
+
+voronoi_flow = deldir(x,y)
+plot(voronoi_flow)
+```
+
+##Study of different configurations of regions.
+
+* We tried here to study all the configurations interesting for our subject:
+    + The voronoi mapping of the old configuration (Voronoi map with centroids of current regions as center)
+    + The voronoi mapping taking the points corrected by the formula $(1)$ and applying K-means algorithm with K=206 regions (Taking flows of population and population into account) 
+    + The voronoi mapping taking only the coordinates of the cities and applying the 206-means algorithm (Most fair configuration possible considering only coordinates of cities)
+    
+* For each cases we:
+    + Plotted the results with cities differently colored by old regions
+    + Made a dataset of the new configuration 
+    + Calculated statistical correlation and mismatches with the old model.
+
+###Taking flows of population and population into account.
+
+####Voronoi map of new regions and plot of cities with different color by old regions.  
+
+```{r, message=FALSE, warning=FALSE}
+x = omega_cluster$centers[,1]
+y = omega_cluster$centers[,2]
+
+voronoi_flow = deldir(x,y)
+#The plot P is the plot of the voronoi which takes flows and populations into account
+P =
+  ggplot() +
+  geom_segment(
+    aes(x = x1, y = y1, xend = x2, yend = y2),
+    size = 0.5,
+    data = voronoi_flow$dirsgs,
+    linetype = 1,
+    alpha = 1 ) +geom_point(data=reg ,aes(x = reg$x, y = reg$y, group = reg$GraOrp, color=reg$GraOrp),size=0.5)+theme(legend.position = "none")+xlab("x")+ylab('y')
+
+p = ggplotly(P)
+p
+
+```
+
+#### Creation of a CSV and statistical comparisons with old regions
+
+```{r, message=FALSE, warning=FALSE}
+H= tile.list(deldir(x,y))
+L=cbind(reg$x,reg$y)
+V = NULL
+for (i in seq(1, 206)){
+  K = as.matrix(cbind(H[[i]]$x,H[[i]]$y) )
+  M = pnt.in.poly(L,K)
+  F = filter(M,M$pip==1)
+  F$pip = NULL
+  F$Id = H[[i]]$ptNum
+  V = rbind(V,F)}
+
+plot(V)
+v = na.omit(V)
+v
+
+f=rename(v,"x"="X1")
+f=rename(f,"y"="X2")
+j=reg
+j$cisdan=NULL
+j$ZobZkr=NULL
+j$pix=NULL
+j$lon=NULL
+j$lat=NULL
+comparison_old_regions = inner_join(j,f,by=c('x','y'))
+l = NULL 
+for (i in seq(1,206)){
+                  1
+                    k = filter(comparison_old_regions,comparison_old_regions$Id==i)
+                    k$region = tail(names(sort(table(k$GraOrp))), 1)
+                    l=rbind(l,k)}
+l$boolean = (l$GraOrp==l$region)
+l=l[,c(2,3,4,1,5,6)]
+l= rename(l,"new regions"="GraOrp")
+l
+
+k=(filter(l,l$boolean==TRUE))
+correlation_l = length(k$x)/length(l$x)
+
+print(paste0("city correlation = ", correlation_l))
+g=NULL
+g$cities=l$`new regions`
+
+h=NULL
+h$cities=l$region
+compare(g,h)
+```
+
+
+### Taking the regions that already exist (old regions)
+
+#### Voronoi map highlighting the limit of this modelisation
+
+We show here that the Voronoi map are just a decent modelization, but still not a perfect modelization. Since borders and Voronoi cell don't perfectly match, we just have a correlation ratio of 78 %.
+
+```{r, message=FALSE, warning=FALSE}
+voronoi_old = deldir(cisreg_l2g$x_cen,cisreg_l2g$y_cen)
+
+Q = ggplot() +
+       geom_segment(
+             aes(x = x1, y = y1, xend = x2, yend = y2),
+             size = 0.5,
+             data = voronoi_old$dirsgs,
+             linetype = 1,
+             alpha = 1 ) +geom_point(data=reg ,aes(x = reg$x, y = reg$y, group = reg$GraOrp, color=reg$GraOrp),size=0.5)+theme(legend.position = "none")+xlab("x")+ylab('y') 
+
+q = ggplotly(Q) 
+q
+Q = ggplot() +
+       geom_segment(
+             aes(x = x1, y = y1, xend = x2, yend = y2),
+             size = 0.5,
+             data = voronoi_old$dirsgs,
+             linetype = 1,
+             alpha = 1 ) +geom_point(data=reg ,aes(x = reg$x, y = reg$y, group = reg$GraOrp, color=reg$GraOrp),size=2)+theme(legend.position = "none") +xlab("x")+ylab('y')
+
+Q <- Q + coord_fixed(xlim = c(-8e+5,-7e+5), ylim = c(-11e+5,-10e+5))+geom_circle(aes(x0 = -7.5e+5, y0 = -10.5e+5, r = 22000),col="red")
+
+
+
+Q = ggplot() +
+       geom_segment(
+             aes(x = x1, y = y1, xend = x2, yend = y2),
+             size = 0.5,
+             data = voronoi_old$dirsgs,
+             linetype = 1,
+             alpha = 1 )+ geom_polygon(data =intpol_pro_s3e_vsb_sacz0_com_geomapfor_l2g_pol, aes(x = x, y = y, group = group), color = "red", size = 0.5, fill = NA)+ coord_fixed(xlim = c(-8e+5,-7e+5), ylim = c(-11e+5,-10e+5))+xlab("x")+ylab('y')
+Q
+
+Q = ggplot() +
+       geom_segment(
+             aes(x = x1, y = y1, xend = x2, yend = y2),
+             size = 0.5,
+             data = voronoi_old$dirsgs,
+             linetype = 1,
+             alpha = 1 ) +geom_point(data=reg ,aes(x = reg$x, y = reg$y, group = reg$GraOrp, color=reg$GraOrp),size=2)+theme(legend.position = "none") +xlab("x")+ylab('y')
+
+Q <- Q +geom_circle(aes(x0 = -537500, y0 = -1187500, r = 22000),col="red")+ coord_fixed(xlim = c(-6e+5,-5e+5), ylim = c(-12.5e+5,-11.5e+5))
+Q
+```
+
+#### Creation of a CSV and statistical comparisons with old regions
+
+```{r, message=FALSE, warning=FALSE}
+HH= tile.list(voronoi_old)
+LL=cbind(reg$x,reg$y)
+VV = NULL
+for (i in seq(1, 206)){
+  KK = as.matrix(cbind(HH[[i]]$x,HH[[i]]$y) )
+  MM = pnt.in.poly(LL,KK)
+  FF = filter(MM,MM$pip==1)
+  FF$pip = NULL
+  FF$Id = HH[[i]]$ptNum
+  VV = rbind(VV,FF)}
+
+plot(VV)
+vv = na.omit(VV)
+vv
+
+
+f=rename(vv,"x"="X1")
+f=rename(f,"y"="X2")
+j=reg
+j$cisdan=NULL
+j$ZobZkr=NULL
+j$pix=NULL
+j$lon=NULL
+j$lat=NULL
+comparison_old_regions = inner_join(j,f,by=c('x','y'))
+ll = NULL 
+for (i in seq(1,206)){
+                  1
+                    kk = filter(comparison_old_regions,comparison_old_regions$Id==i)
+                    kk$region = tail(names(sort(table(kk$GraOrp))), 1)
+                    ll=rbind(ll,kk)}
+ll$boolean = (ll$GraOrp==ll$region)
+ll=ll[,c(2,3,4,1,5,6)]
+ll= rename(ll,"new regions"="GraOrp")
+ll
+
+kk=(filter(ll,ll$boolean==TRUE))
+correlation_ll = length(kk$x)/length(ll$x)
+
+print(paste0("city correlation = ", correlation_ll))
+g=NULL
+g$cities=ll$`new regions`
+
+h=NULL
+h$cities=ll$region
+compare(g,h)
+```
+
+### Most fair configuration possible
+
+#### Voronoi map
+
+```{r, message=FALSE, warning=FALSE}
+fair = kmeans(na.omit(as.data.frame(cbind(reg$x,reg$y))),length(unique(reg$GraOrp)))
+X = fair$centers[,1]
+Y = fair$centers[,2]
+voronoi_fair = deldir(X,Y)
+
+#The plot R is the plot of the voronoi in  the most fair configuration
+R =
+  ggplot() +
+  geom_segment(
+    aes(x = x1, y = y1, xend = x2, yend = y2),
+    size = 0.5,
+    data = voronoi_fair$dirsgs,
+    linetype = 1,
+    alpha = 1 ) +geom_point(data=reg ,aes(x = reg$x, y = reg$y, group = reg$GraOrp, color=reg$GraOrp),size=0.5)+theme(legend.position = "none")+xlab("x")+ylab('y')
+r = ggplotly(R)
+r
+
+```
+
+#### Creation of a CSV and statistical comparisons with old regions
+
+```{r, message=FALSE, warning=FALSE}
+HHH = tile.list(deldir(X,Y))
+LLL=cbind(reg$x,reg$y)
+VVV = NULL
+for (i in seq(1, 206)){
+  KKK = as.matrix(cbind(HHH[[i]]$x,HHH[[i]]$y) )
+  MMM = pnt.in.poly(LLL,KKK)
+  FFF = filter(MMM,MMM$pip==1)
+  FFF$pip = NULL
+  FFF$Id = HHH[[i]]$ptNum
+  VVV = rbind(VVV,FFF)}
+
+plot(VVV)
+vvv = na.omit(VVV)
+vvv
+
+#csv of the population of each voronoi region created by the most fair configuration
+
+f=rename(vvv,"x"="X1")
+f=rename(f,"y"="X2")
+j=reg
+j$cisdan=NULL
+j$ZobZkr=NULL
+j$pix=NULL
+j$lon=NULL
+j$lat=NULL
+comparison_old_regions = inner_join(j,f,by=c('x','y'))
+lll = NULL 
+for (i in seq(1,206)){
+                    kkk = filter(comparison_old_regions,comparison_old_regions$Id==i)
+                    kkk$region = tail(names(sort(table(kkk$GraOrp))), 1)
+                    lll=rbind(lll,kkk)}
+lll$boolean = (lll$GraOrp==lll$region)
+lll=lll[,c(2,3,4,1,5,6)]
+lll= rename(lll,"new regions"="GraOrp")
+lll
+
+kkk=(filter(lll,lll$boolean==TRUE))
+correlation_lll = length(kkk$x)/length(lll$x)
+print(paste0("city correlation = ", correlation_lll))
+g=NULL
+g$cities=lll$`new regions`
+
+h=NULL
+h$cities=lll$region
+compare(g,h)
+
+```
+
+## Attempt of improvement
+
+### Weighted Voronoi
+
+
+
+
+
+
+
+
+In order to improve the results of the Voronoi maps, we use the weighted Voronoi  diagrams. The shape are not simply convex polygons anymore, but smoother geometric shapes.
+The standard Voronoi map is made using the following formula :
+
+
+
+* Let S a set of points in $\mathbb{R}^2$  
+    + $S=\{ x_k\}_ {k \in[[1,n]]}$   
+    + $Vor_{S}(x_i)=\{x \in \mathbb{R}^2 | \forall x_j \in S~ \|x-x_i\| \leqslant \|x-x_j\| \}$
+
+
+
+
+
+
+
+
+
+
+![](https://upload.wikimedia.org/wikipedia/commons/thumb/5/54/Euclidean_Voronoi_diagram.svg/1200px-Euclidean_Voronoi_diagram.svg.png)
+
+
+
+
+
+
+
+
+
+
+
+
+
+For the additively weighted Vororoi diagram, the formula is slightly different :  $Vor_S^{AW}(x_i)=\{x \in \mathbb{R}^2 | \forall x_j \in S~ \|x-x_i\|-w_i \leqslant \|x-x_j\|-w_j \}$ 
+
+
+
+We choose the weight as the following ratio : $w_i=Surface ~of ~the~ voronoi~ tile /Surface ~of ~the ~real~ region$
+
+
+
+
+
+
+
+
+
+
+
+
+
+![](https://www.stat.auckland.ac.nz/~paul/Reports/VoronoiTreemap/awv.png)
+
+
+
+
+
+Also interesting, but less relevant in our study,the multiplicatively weighted Voronoi diagram.
+The formula for these diagrams are also different from the standard voronoi : 
+
+  $Vor_S^{MW}(x_i)=\{x \in \mathbb{R}^2 | \forall x_j \in S~ \|x-x_i\| /w_i \leqslant \|x-x_i\|/w_j \}$ with the same weight than the additively weighted Voronoi. 
+
+
+
+
+![](https://www.researchgate.net/profile/Jan_Vitek/publication/220442964/figure/fig2/AS:394123682041857@1470977816988/Multiplicative-weighted-Voronoi-diagram-MWVD-of-20-sensors-Each-sensor-is-represented.png)
+
+
+
+
+# Second case : The number of regions is unknown
+
+***
+
+This case is different than the first case, the number of regions that the modelization has to have is unknown, we can't just apply K-means algorithm anymore because we don't know the value of K. Through this chapter we'll try other techniques of clustering and then try also with one additional parameter (maximum distance between the service center and other cities of the same region)
+
+## Without further parameter
+
+Here we will try X-means and EM algorithm.
+
+### X-means clustering 
+
+```{r, message=FALSE, warning=FALSE}
+
+
+## CHOOSING K
+k <- list()
+for(i in 1:6){
+  k[[i]] <- kmeans(omega, i)
+}
+
+
+
+
+betweenss_totss <- list()
+for(i in 1:6){
+  betweenss_totss[[i]] <- k[[i]]$betweenss/k[[i]]$totss
+}
+
+plot(1:6, betweenss_totss, type = "b", 
+     ylab = "Between SS / Total SS", xlab = "Clusters (k)")
+
+best_K = function(points,kmax){
+  k <- list()
+  for(i in 1:kmax){
+    k[[i]] <- kmeans(points, i)
+  }
+  betweenss_totss <- list()
+  for(i in 1:kmax){
+    betweenss_totss[[i]] <- k[[i]]$betweenss/k[[i]]$totss
+  }
+  A = list()
+  for (i in seq(1:(kmax-2))){
+    A[[i]] = betweenss_totss[[i+2]]-2*betweenss_totss[[i+1]]+betweenss_totss[[i]]
+    }
+  return(which.min(A)+1)}
+
+
+print(paste0("best number of clusters : ", best_K(omega,kmax=5)))
+
+for(i in 1:4){
+  plot(omega, col = k[[i]]$cluster)
+}
+F = k[[best_K(omega,kmax=5)]]
+
+```
+
+
+
+
+
+The Elbow method is a heuristic method of interpretation and validation of consistency within cluster analysis designed to help finding the appropriate number of clusters in a dataset.It relies in the percentage of variance explained by number of clusters, we keep the number of clusters that has the biggest slope difference.
+
+Following that technique, we have a number of regions equal to 2.
+
+Here we don't need to make statistical outputs to see that this algorithm is not very tailored for this purpose but we actually did it.The correllation number with old regions is very low.This technique failed to give decent results.
+
+
+
+
+```{r, message=FALSE, warning=FALSE}
+
+F = k[[best_K(omega,kmax=5)]]
+F = F$centers
+F = deldir(as.data.frame(F))
+#plotting method ----
+p.ele <- ggplot() #+ theme(aspect.ratio = (asp.rat.ext))
+#p.ele <- p.ele + coord_fixed(xlim = c(-8e+5,-7e+5), ylim = c(-12e+5,-10e+5))
+
+# FOR POLYGONS
+# FOR POINTS  
+#p.ele <- p.ele + geom_point(data = attraseva.adm.map.all, aes(lon,lat), size=0.5, colour="seashell1",shape=15,alpha=0.4)
+
+p.ele = p.ele+ geom_segment(
+  aes(x = x1, y = y1, xend = x2, yend = y2),
+  size = 0.5,
+  data = F$dirsgs,
+  linetype = 1,
+  alpha = 1 ) +geom_point(data=reg ,aes(x = reg$x, y = reg$y, group = reg$GraOrp, color=reg$GraOrp),size=0.5)+theme(legend.position = "none")
+#p.ele <- p.ele + theme.clean.F
+p.ele <- p.ele + labs(
+  #title="Voronoi Map of regions",
+  #subtitle="",
+  x = "X",y = "Y")
+
+#p.ele <- p.ele + geom_polygon(data =intpol_pro_s3e_vsb_sacz0_com_geomapfor_l2g_pol, aes(x = x, y = y, group = group), color = "black", size = 0.5, fill = NA)
+
+
+pele = ggplotly(p.ele)
+pele
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+HHH = tile.list(F)
+LLL=cbind(reg$x,reg$y)
+VVV = NULL
+for (i in seq(1, F$n.data)){
+  KKK = as.matrix(cbind(HHH[[i]]$x,HHH[[i]]$y) )
+  MMM = pnt.in.poly(LLL,KKK)
+  FFF = filter(MMM,MMM$pip==1)
+  FFF$pip = NULL
+  FFF$Id = HHH[[i]]$ptNum
+  VVV = rbind(VVV,FFF)}
+
+
+vvv = na.omit(VVV)
+vvv
+
+#csv of the population of each voronoi region created by the most fair configuration
+
+f=rename(vvv,"x"="X1")
+f=rename(f,"y"="X2")
+j=reg
+j$cisdan=NULL
+j$ZobZkr=NULL
+j$pix=NULL
+j$lon=NULL
+j$lat=NULL
+comparison_old_regions = inner_join(j,f,by=c('x','y'))
+lll = NULL 
+for (i in seq(1,F$n.data)){
+                    kkk = filter(comparison_old_regions,comparison_old_regions$Id==i)
+                    kkk$region = tail(names(sort(table(kkk$GraOrp))), 1)
+                    lll=rbind(lll,kkk)}
+lll$boolean = (lll$GraOrp==lll$region)
+lll=lll[,c(2,3,4,1,5,6)]
+lll= rename(lll,"new regions"="GraOrp")
+lll
+
+kkk=(filter(lll,lll$boolean==TRUE))
+correlation_lll = length(kkk$x)/length(lll$x)
+print(paste0("city correlation = ", correlation_lll))
+g=NULL
+g$cities=lll$`new regions`
+
+h=NULL
+h$cities=lll$region
+compare(g,h)
+
+```
+
+
+### EM algorithm
+
+The expectation–maximization (EM) algorithm is an iterative method to find maximum likelihood or maximum a posteriori (MAP) estimates of parameters in statistical models, where the model depends on unobserved latent variables
+
+#### BIC criterion 
+
+The BIC (Bayesian information criterion) is a criterion for model selection among a finite set of models; the model with the lowest BIC is preferred. It is based, in part, on the likelihood function and it is closely related to the Akaike information criterion (AIC).The best score for the for the BIC is always between 20 and 30 clusters (numbers of components here)
+
+The other plots are the clusters clasifications, uncertainty and density according to an hypothetical probabilistic mixture distribution.
+
+
+```{r, message=FALSE, warning=FALSE}
+
+
+fitM <- Mclust(omega,G=20:30)
+plot(fitM)
+
+```
+
+#### Voronoi map
+
+```{r, message=FALSE, warning=FALSE}
+
+F = t(as.matrix(fitM$parameters$mean))
+F = deldir(as.data.frame(F))
+#plotting method ----
+p.ele <- ggplot() #+ theme(aspect.ratio = (asp.rat.ext))
+#p.ele <- p.ele + coord_fixed(xlim = c(-8e+5,-7e+5), ylim = c(-12e+5,-10e+5))
+
+# FOR POLYGONS
+# FOR POINTS  
+#p.ele <- p.ele + geom_point(data = attraseva.adm.map.all, aes(lon,lat), size=0.5, colour="seashell1",shape=15,alpha=0.4)
+
+p.ele = p.ele+ geom_segment(
+  aes(x = x1, y = y1, xend = x2, yend = y2),
+  size = 0.5,
+  data = F$dirsgs,
+  linetype = 1,
+  alpha = 1 ) +geom_point(data=reg ,aes(x = reg$x, y = reg$y, group = reg$GraOrp, color=reg$GraOrp),size=0.5)+theme(legend.position = "none")
+#p.ele <- p.ele + theme.clean.F
+p.ele <- p.ele + labs(
+  #title="Voronoi Map of regions",
+  #subtitle="",
+  x = "X",y = "Y")
+
+#p.ele <- p.ele + geom_polygon(data =intpol_pro_s3e_vsb_sacz0_com_geomapfor_l2g_pol, aes(x = x, y = y, group = group), color = "black", size = 0.5, fill = NA)
+
+
+pele = ggplotly(p.ele)
+pele
+
+```
+
+#### Creation of a CSV and statistical comparisons with old regions
+
+
+```{r, message=FALSE, warning=FALSE}
+HHH = tile.list(F)
+LLL=cbind(reg$x,reg$y)
+VVV = NULL
+for (i in seq(1, F$n.data)){
+  KKK = as.matrix(cbind(HHH[[i]]$x,HHH[[i]]$y) )
+  MMM = pnt.in.poly(LLL,KKK)
+  FFF = filter(MMM,MMM$pip==1)
+  FFF$pip = NULL
+  FFF$Id = HHH[[i]]$ptNum
+  VVV = rbind(VVV,FFF)}
+
+plot(VVV)
+vvv = na.omit(VVV)
+vvv
+
+#csv of the population of each voronoi region created by the most fair configuration
+
+f=rename(vvv,"x"="X1")
+f=rename(f,"y"="X2")
+j=reg
+j$cisdan=NULL
+j$ZobZkr=NULL
+j$pix=NULL
+j$lon=NULL
+j$lat=NULL
+comparison_old_regions = inner_join(j,f,by=c('x','y'))
+lll = NULL 
+for (i in seq(1,F$n.data)){
+                    kkk = filter(comparison_old_regions,comparison_old_regions$Id==i)
+                    kkk$region = tail(names(sort(table(kkk$GraOrp))), 1)
+                    lll=rbind(lll,kkk)}
+lll$boolean = (lll$GraOrp==lll$region)
+lll=lll[,c(2,3,4,1,5,6)]
+lll= rename(lll,"new regions"="GraOrp")
+lll
+
+kkk=(filter(lll,lll$boolean==TRUE))
+correlation_lll = length(kkk$x)/length(lll$x)
+print(paste0("city correlation = ", correlation_lll))
+g=NULL
+g$cities=lll$`new regions`
+
+h=NULL
+h$cities=lll$region
+compare(g,h)
+
+```
+
+
+
+## With limitation of distance between services centers and cities
+
+We set a maximum distance between the service center and the farthest city in the region.
+Its value is 15 km.
+
+### Hierarchical clustering
+
+Hierarchical clustering (also called hierarchical cluster analysis or HCA) is a method of cluster analysis which seeks to build a hierarchy of clusters. Here we will use the Complete-linkage clustering which is one of several methods of agglomerative hierarchical clustering. At the beginning of the process, each element is in a cluster of its own. The clusters are then sequentially combined into larger clusters until all elements end up being in the same cluster. The method is also known as farthest neighbour clustering. The result of the clustering can be visualized as a dendrogram, which shows the sequence of cluster fusion and the distance at which each fusion took place.
+
+
+The interest of the method is to set maximum diameter of each cluster, and we can infer eventually a upper bound of the maximum distance between the service center and the farthest city of the region. 
+
+Note that we have a surprisingly good correlation between this technique and current regions ( 63 % ) in comparison with the other techniques. Even the number of regions is almost the same (202).
+
+![](https://www.researchgate.net/profile/Pamela_Guevara/publication/281014334/figure/fig57/AS:418517879934980@1476793847581/The-three-linkage-types-of-hierarchical-clustering-single-link-complete-link-and.png)
+
+
+![](http://res.cloudinary.com/dyd911kmh/image/upload/f_auto,q_auto:best/v1527608848/hclust_complete_dist.png)
+
+#### Dendrogram and clustered plot
+
+
+
+``` {r, message=FALSE, warning=FALSE}
+
+
+# HIERACHICAL CLUSTERING ----
+distance.max = 15000
+d <- dist(omega)
+fitH <- hclust(d, "complete")
+plot(fitH) 
+rect.hclust(fitH, h = 2*distance.max , border = "red") 
+clusters <- cutree(fitH, h=2*distance.max) 
+plot(omega, col = clusters)
+plot(clusters)
+print(paste0('Number of clusters : '  ,  max(clusters)))
+
+  
+
+```
+
+#### Voronoi map
+
+``` {r, message=FALSE, warning=FALSE}
+s = omega
+s$order = clusters
+q1 = s%>%
+  group_by(order)%>%
+  summarize(centroids = mean(x,na.rm= TRUE))
+q2 = s%>%
+  group_by(order)%>%
+  summarize(centroids = mean(y,na.rm= TRUE))
+q = inner_join(q1,q2,by='order')
+
+vor = deldir(q$centroids.x,q$centroids.y)
+
+R =
+  ggplot() +
+  geom_segment(
+    aes(x = x1, y = y1, xend = x2, yend = y2),
+    size = 0.5,
+    data = vor$dirsgs,
+    linetype = 1,
+    alpha = 1 ) +geom_point(data=reg ,aes(x = reg$x, y = reg$y, group = reg$GraOrp, color=reg$GraOrp),size=0.5)+theme(legend.position = "none")
+r = ggplotly(R)
+r
+
+```
+
+#### CSV and statical comparison with old regions
+
+``` {r, message=FALSE, warning=FALSE}
+HH= tile.list(vor)
+LL=cbind(reg$x,reg$y)
+VV = NULL
+for (i in seq(1, length(q$order))){
+  KK = as.matrix(cbind(HH[[i]]$x,HH[[i]]$y) )
+  MM = pnt.in.poly(LL,KK)
+  FF = filter(MM,MM$pip==1)
+  FF$pip = NULL
+  FF$Id = HH[[i]]$ptNum
+  VV = rbind(VV,FF)}
+
+plot(VV)
+vv = na.omit(VV)
+vv = unique(vv)
+vv
+
+
+f=rename(vv,"x"="X1")
+f=rename(f,"y"="X2")
+j=reg
+j$cisdan=NULL
+j$ZobZkr=NULL
+j$pix=NULL
+j$lon=NULL
+j$lat=NULL
+comparison_old_regions = inner_join(j,f,by=c('x','y'))
+lll = NULL 
+for (i in seq(1,vor$n.data)){
+                    kkk = filter(comparison_old_regions,comparison_old_regions$Id==i)
+                    kkk$region = tail(names(sort(table(kkk$GraOrp))), 1)
+                    lll=rbind(lll,kkk)}
+lll$boolean = (lll$GraOrp==lll$region)
+lll=lll[,c(2,3,4,1,5,6)]
+lll= rename(lll,"new regions"="GraOrp")
+lll
+
+kkk=(filter(lll,lll$boolean==TRUE))
+correlation_lll = length(kkk$x)/length(lll$x)
+print(paste0("city correlation = ", correlation_lll))
+
+
+
+```
+
+
+### Code of a enhanced X-means algorithm
+
+This part is an improvement of the X-means algorithm , due to its trickiness we only have the first iterations. It's a recursive function that takes as input the centroid of a region and all the points in a region , apply the X-means algorithm viewed above until all the regions have their distance between the service center and the farthest city of the region . 
+
+* Actually, we made 2 intermediates functions : 
+    + distance_max 
+    + best_K
+
+#### Settings 
+
+```{r, message=FALSE, warning=FALSE}
+Lmax <- 15000
+L <- list()
+points = omega
+points$ZobZkr = NULL
+points$GraOrp = NULL
+points$pix = NULL
+points$lon = NULL
+points$lat = NULL
+points$cisdan = NULL
+points = na.omit(points)
+centroid = c(cisreg_cz0$x_cen,cisreg_cz0$y_cen)
+```
+
+####calculation of the largest distance between the centroid and the cities of the region newly created
+
+The inputs of this function are centroid and points of a region, the output is the maximum distance between the service center and the farthest city of the region.
+
+```{r, message=FALSE, warning=FALSE}
+distance_max = function(centroid,points){
+  points$x1=centroid[1] 
+  points$y1=centroid[2]
+  points$distance = sqrt((points$x-points$x1)^2+(points$y-points$y1)^2)
+  
+  return(max(points$distance))}
+```
+
+####Elbow trick to find the best k for the kmeans algorithm
+
+This function evaluates the best K for the K-means algorithm.With an upper bound 
+
+```{r, message=FALSE, warning=FALSE}
+best_K = function(points,kmax){
+  k <- list()
+  for(i in 1:kmax){
+    k[[i]] <- kmeans(points, i)
+  }
+  betweenss_totss <- list()
+  for(i in 1:kmax){
+    betweenss_totss[[i]] <- k[[i]]$betweenss/k[[i]]$totss
+  }
+  A = list()
+  for (i in seq(1:(kmax-2))){
+    A[[i]] = betweenss_totss[[i+2]]-2*betweenss_totss[[i+1]]+betweenss_totss[[i]]
+    }
+  return(which.min(A)+1)}
+
+```
+
+####creation of a recursive function that cluster the points taking the limitation of distance into consideration
+
+This function is not actually working due to side effects of recursivity. But here are the 3 first iterations.
+
+```{r, message=FALSE, warning=FALSE}
+
+Clu <- function(centroid,points){
+  centroids = na.omit(centroid)
+  points = na.omit(points)
+  if (distance_max(centroid,points)>Lmax){
+    k = best_K(points,kmax =20)
+    kms = kmeans(points,k)
+    points$Id = kms$cluster
+    for (i in seq(1:k)){
+      F = filter(points,points$Id == i)
+      F$Id = NULL
+      L =list.append(Clu(centroid = kms$centers[,i],points = F ))
+      
+      }
+    } 
+  else 
+  {return(L)}
+}
+
+```
+
+```{r, message=FALSE, warning=FALSE}
+
+#Clu(centroid,points)
+
+## CHOOSING K
+k <- list()
+for(i in 1:6){
+  k[[i]] <- kmeans(omega, i)
+}
+
+plot(omega, col = k[[1]]$cluster)
+
+
+
+ 
+V=omega
+V$Id = k[[2]]$cluster
+
+V1=filter(V,Id==1)
+V1$Id=NULL
+
+k1=kmeans(V1,best_K(V1,kmax=10))
+V1$Id = k1$cluster
+V2=filter(V,Id==2)
+V2$Id=NULL
+
+k2=kmeans(V2,best_K(V2,kmax=10))
+V2$Id = k2$cluster
+plot(cbind(V$x,V$y),col=V$Id)
+
+V2$Id =V2$Id + best_K(V1,kmax=10)
+V1234 = rbind(V1,V2)
+plot(cbind(V1234$x,V1234$y),col=V1234$Id)
+```
+
+# Conclusion
+
+* The aim of that report was to find a way to improve the public service by reshaping the regions of Czech republic and taking flows of population and population into account. 
+    + In the first part, we set new coordinate by using the formula $(1)$ meant to create new coordinates taking flows of population and population into account.
+    + In the first case, the number of region was set and equal to the number of current regions. We used the K-means algorithm to cluster the points obtained by the formula $(1)$, and then we made a Voronoi map out of it. And it gave us decent result despite the fact that Voronoi maps are not a perfect modelization.
+    + In the second case, the number of regions was unknown. we couldn't use the K-means algorithm but we used X-means and EM algorithm instead, both algorithm wasn't really suited even though EM algorithm is a bit better than X-means.In light of the above, we decided to add a contraint to this modelization by setting a maximum distance between a service center and the other cities of the region. Then we used hierarchical clustering and it gave us really good results, if not the best so far.Eventually, we tried to create a recursive function using the X-means algorithm using the same constraint than in the hierarchical clustering.
+
+# Acknowledgement
+
+I'd to thank my tutor Mr Hylmar for its help during this tricky project,but also Mr Bestak to have accepted my application for this internship and of course Mrs Ranwez without whom this internship couldn't have been possible.
+
+# Source
+
+https://www.researchgate.net/publication/220442964_Redundancy_and_Coverage_Detection_in_Sensor_Networks/figures?lo=1
+https://en.wikipedia.org/wiki/K-means_clustering
+https://en.wikipedia.org/wiki/Expectation–maximization_algorithm
+https://en.wikipedia.org/wiki/Hierarchical_clustering
+https://en.wikipedia.org/wiki/Complete-linkage_clustering
+https://www.stat.auckland.ac.nz/~paul/Reports/VoronoiTreemap/voronoiTreeMap.html
+https://en.wikipedia.org/wiki/Determining_the_number_of_clusters_in_a_data_set
+
+
+
+
+
+
+
+
+
+
+
